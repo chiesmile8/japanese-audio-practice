@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>日本語アノテーション練習 v3</title>
+<style>
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Noto Sans JP",sans-serif;margin:0;background:#f5f6f8;color:#222}
+main{max-width:1100px;margin:24px auto;padding:0 16px}
+h1{font-size:24px;margin:0 0 8px}.sub{color:#666;margin-bottom:18px}
+.panel{background:white;border:1px solid #ddd;border-radius:12px;padding:16px;margin:12px 0}
+button,input{font:inherit}button{padding:8px 12px;border:1px solid #bbb;border-radius:8px;background:white;cursor:pointer}button:hover{background:#f0f0f0}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.level button.active{background:#222;color:#fff}
+#file{max-width:300px}
+canvas{width:100%;height:150px;border:1px solid #ccc;border-radius:8px;background:#111;display:block}
+#spec{height:220px;margin-top:8px}
+.timeline{position:relative;height:100px;background:#fafafa;border:1px solid #ccc;border-radius:8px;margin-top:10px;overflow:hidden}
+.word{position:absolute;top:25px;height:48px;background:#dbeafe;border:2px solid #3b82f6;border-radius:8px;box-sizing:border-box;cursor:grab;display:flex;align-items:center;justify-content:center;font-weight:700;user-select:none}
+.word.selected{background:#fde68a;border-color:#d97706}
+.handle{position:absolute;top:-2px;width:10px;height:48px;background:#3b82f6;cursor:ew-resize}.handle.l{left:-5px}.handle.r{right:-5px}
+#ticks{font-size:12px;color:#666;display:flex;justify-content:space-between;margin-top:4px}
+.words{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.words button{min-width:80px}
+.score{font-size:20px;font-weight:700}.small{font-size:13px;color:#666}.ok{color:#167c35}.warn{color:#a15c00}
+#hint{line-height:1.7}
+</style>
+</head>
+<body>
+<main>
+<h1>日本語音声アノテーション練習 v3</h1>
+<div class="sub">「今日は / いい / 天気 / ですね」を、実際の録音で区切る練習</div>
+
+<div class="panel">
+  <b>1. 音声を用意</b>
+  <div class="controls" style="margin-top:10px">
+    <input id="file" type="file" accept="audio/*">
+    <button id="mic">マイク録音</button>
+    <button id="stop" disabled>停止</button>
+    <button id="fallback">ブラウザ音声を使う</button>
+  </div>
+  <p class="small">MP3/WAV/M4Aなどの実録音を読み込めます。録音練習なら「マイク録音」で「今日はいい天気ですね」と話してください。</p>
+</div>
+
+<div class="panel level">
+  <b>2. レベル</b>
+  <div class="controls" style="margin-top:10px">
+    <button data-level="beginner" class="active">初級</button>
+    <button data-level="intermediate">中級</button>
+    <button data-level="advanced">上級</button>
+  </div>
+  <div id="levelText" class="small" style="margin-top:8px"></div>
+</div>
+
+<div class="panel">
+  <div class="controls">
+    <button id="playAll">▶ 全体</button>
+    <button id="slow">速度 0.5x</button>
+    <button id="reset">境界をリセット</button>
+    <button id="check">採点</button>
+    <span id="status" class="small">音声未読み込み</span>
+  </div>
+</div>
+
+<div class="panel">
+  <b>波形</b>
+  <canvas id="wave" width="1060" height="150"></canvas>
+  <b style="display:block;margin-top:10px">スペクトログラム</b>
+  <canvas id="spec" width="1060" height="220"></canvas>
+  <div id="timeline" class="timeline"></div>
+  <div id="ticks"><span>0.0s</span><span id="endTick">1.0s</span></div>
+</div>
+
+<div class="panel">
+  <b>単語をクリックして、その区間だけ再生</b>
+  <div class="words" id="words"></div>
+  <p id="hint" class="small"></p>
+</div>
+
+<div class="panel">
+  <div class="score">スコア：<span id="score">--</span></div>
+  <div id="detail" class="small" style="margin-top:6px"></div>
+</div>
+</main>
+
+<script>
+const labels=["今日は","いい","天気","ですね"];
+const levels={
+ beginner:"境界を大きくずらさず、まず「音が始まる／終わる」を探します。",
+ intermediate:"子音の弱い立ち上がりや、語境界の無音の少ない部分まで意識します。",
+ advanced:"スペクトログラムも使い、子音・母音の変化点を細かく確認します。"
+};
+let audio=new Audio(), blobUrl=null, duration=1, speed=.5, selected=-1;
+let regions=[[0.00,0.24],[0.24,0.48],[0.48,0.72],[0.72,1.00]];
+let correct=[[0.00,0.24],[0.24,0.48],[0.48,0.72],[0.72,1.00]];
+let dragging=null, audioCtx=null, analyser=null, raf=null;
+
+const wave=document.getElementById("wave"), wctx=wave.getContext("2d");
+const spec=document.getElementById("spec"), sctx=spec.getContext("2d");
+const timeline=document.getElementById("timeline");
+
+function setLevel(l){
+ document.querySelectorAll(".level button").forEach(b=>b.classList.toggle("active",b.dataset.level===l));
+ document.getElementById("levelText").textContent=levels[l];
+}
+setLevel("beginner");
+
+document.querySelectorAll(".level button").forEach(b=>b.onclick=()=>setLevel(b.dataset.level));
+
+function drawWave(){
+ const W=wave.width,H=wave.height;
+ wctx.fillStyle="#111";wctx.fillRect(0,0,W,H);
+ wctx.strokeStyle="#555";wctx.beginPath();wctx.moveTo(0,H/2);wctx.lineTo(W,H/2);wctx.stroke();
+ if(!audio.bufferData){
+   wctx.strokeStyle="#777";wctx.beginPath();
+   for(let x=0;x<W;x++){let y=H/2+Math.sin(x*.08)*3+Math.sin(x*.021)*2;if(x===0)wctx.moveTo(x,y);else wctx.lineTo(x,y)}
+   wctx.stroke();
+   return;
+ }
+ const d=audio.bufferData, step=Math.max(1,Math.floor(d.length/W));
+ wctx.strokeStyle="#9ca3af";wctx.beginPath();
+ for(let x=0;x<W;x++){
+   let min=1,max=-1;
+   const a=x*step;
+   for(let j=0;j<step && a+j<d.length;j++){const v=d[a+j];if(v<min)min=v;if(v>max)max=v}
+   const y1=H/2+min*H*.42, y2=H/2+max*H*.42;
+   wctx.moveTo(x,y1);wctx.lineTo(x,y2);
+ }
+ wctx.stroke();
+}
+function drawSpec(){
+ const W=spec.width,H=spec.height;sctx.fillStyle="#111";sctx.fillRect(0,0,W,H);
+ if(!audio.bufferData){
+   sctx.fillStyle="#303030";
+   for(let y=0;y<H;y+=6)for(let x=0;x<W;x+=6){
+     const v=20+Math.floor(35*Math.abs(Math.sin(x*.025+y*.035)));
+     sctx.fillStyle=`rgb(${v},${v},${Math.min(80,v+20)})`;sctx.fillRect(x,y,4,4);
+   }
+   return;
+ }
+ const d=audio.bufferData, fft=1024, hop=512;
+ const cols=Math.min(W,Math.max(1,Math.floor((d.length-fft)/hop)));
+ for(let x=0;x<cols;x++){
+  const start=x*hop;
+  for(let k=1;k<fft/2;k+=4){
+   let re=0,im=0;
+   for(let n=0;n<fft;n++){
+    const idx=start+n; if(idx>=d.length) break;
+    const v=d[idx]*(.5-.5*Math.cos(2*Math.PI*n/(fft-1)));
+    const a=2*Math.PI*k*n/fft; re+=v*Math.cos(a); im-=v*Math.sin(a);
+   }
+   const mag=Math.min(1,Math.log1p(Math.sqrt(re*re+im*im)*10)/7);
+   const y=H-(k/(fft/2))*H;
+   const c=Math.floor(30+210*mag);
+   sctx.fillStyle=`rgb(${c},${Math.floor(30+150*mag)},${Math.floor(60+180*mag)})`;
+   sctx.fillRect(x,y,2,4);
+  }
+ }
+}
+function renderRegions(){
+ timeline.innerHTML="";
+ regions.forEach((r,i)=>{
+  const el=document.createElement("div");el.className="word"+(i===selected?" selected":"");
+  el.style.left=(r[0]/duration*100)+"%";el.style.width=((r[1]-r[0])/duration*100)+"%";
+  el.textContent=labels[i];el.dataset.i=i;
+  const l=document.createElement("div");l.className="handle l";const rr=document.createElement("div");rr.className="handle r";
+  el.append(l,rr);timeline.appendChild(el);
+  el.addEventListener("click",e=>{if(e.target.classList.contains("handle"))return;selected=i;renderRegions();playRegion(i)});
+  l.addEventListener("pointerdown",e=>startDrag(e,i,"l"));rr.addEventListener("pointerdown",e=>startDrag(e,i,"r"));
+ });
+}
+function startDrag(e,i,side){e.preventDefault();dragging={i,side};timeline.setPointerCapture(e.pointerId)}
+timeline.addEventListener("pointermove",e=>{
+ if(!dragging)return;const rect=timeline.getBoundingClientRect();let t=((e.clientX-rect.left)/rect.width)*duration;
+ const i=dragging.i; t=Math.max(0,Math.min(duration,t));
+ if(dragging.side==="l") regions[i][0]=Math.min(t,regions[i][1]-.01);
+ else regions[i][1]=Math.max(t,regions[i][0]+.01);
+ renderRegions();
+});
+timeline.addEventListener("pointerup",()=>dragging=null);
+
+async function loadBlob(blob){
+ try{
+  if(blobUrl)URL.revokeObjectURL(blobUrl);
+  blobUrl=URL.createObjectURL(blob);
+  audio.src=blobUrl;
+  await new Promise((resolve,reject)=>{
+    audio.onloadedmetadata=resolve;
+    audio.onerror=()=>reject(new Error("audio metadata error"));
+  });
+  duration=audio.duration||1;
+
+  const AC=window.AudioContext||window.webkitAudioContext;
+  if(!AC) throw new Error("Web Audio API unavailable");
+  const ac=new AC();
+  const arr=await blob.arrayBuffer();
+  const buf=await ac.decodeAudioData(arr.slice(0));
+  audio.bufferData=buf.getChannelData(0);
+  audio.sampleRate=buf.sampleRate;
+
+  correct=[[0,.24],[.24,.48],[.48,.72],[.72,1]].map(x=>x.map(v=>v*duration));
+  regions=correct.map(r=>r.slice());
+  document.getElementById("endTick").textContent=duration.toFixed(2)+"s";
+  document.getElementById("status").textContent="読み込み完了："+duration.toFixed(2)+"秒";
+  drawWave();drawSpec();renderRegions();
+ }catch(err){
+  console.error(err);
+  document.getElementById("status").textContent="音声の解析に失敗しました。WAV/MP3を試してください。";
+  drawWave();drawSpec();renderRegions();
+ }
+}
+document.getElementById("file").onchange=e=>{if(e.target.files[0])loadBlob(e.target.files[0])};
+
+async function playRegion(i){
+ if(!audio.src)return;
+ audio.pause();audio.currentTime=regions[i][0];audio.playbackRate=speed;audio.play();
+ const end=regions[i][1];
+ const stop=()=>{if(audio.currentTime>=end){audio.pause();audio.removeEventListener("timeupdate",stop)}};audio.addEventListener("timeupdate",stop);
+}
+document.getElementById("playAll").onclick=()=>{if(!audio.src)return;audio.currentTime=0;audio.playbackRate=speed;audio.play()};
+document.getElementById("slow").onclick=()=>{speed=speed===.5?1:.5;document.getElementById("slow").textContent="速度 "+speed+"x";audio.playbackRate=speed};
+document.getElementById("reset").onclick=()=>{regions=correct.map(r=>r.slice());renderRegions();document.getElementById("score").textContent="--";document.getElementById("detail").textContent=""};
+
+document.getElementById("check").onclick=()=>{
+ let total=0, max=duration*2*regions.length;
+ regions.forEach((r,i)=>{total+=Math.abs(r[0]-correct[i][0])+Math.abs(r[1]-correct[i][1])});
+ let pct=Math.max(0,100-total/max*100);
+ document.getElementById("score").textContent=pct.toFixed(1)+"%";
+ document.getElementById("detail").textContent="各単語の左右の境界のずれ合計："+total.toFixed(3)+"秒";
+};
+
+let rec, chunks=[];
+document.getElementById("mic").onclick=async()=>{
+ const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+ rec=new MediaRecorder(stream);chunks=[];rec.ondataavailable=e=>chunks.push(e.data);
+ rec.onstop=()=>{stream.getTracks().forEach(t=>t.stop());loadBlob(new Blob(chunks,{type:rec.mimeType}))};
+ rec.start();document.getElementById("mic").disabled=true;document.getElementById("stop").disabled=false;document.getElementById("status").textContent="録音中…「今日はいい天気ですね」と話してください";
+};
+document.getElementById("stop").onclick=()=>{rec.stop();document.getElementById("mic").disabled=false;document.getElementById("stop").disabled=true};
+
+document.getElementById("fallback").onclick=()=>{
+ const u=new SpeechSynthesisUtterance("今日はいい天気ですね");u.lang="ja-JP";u.rate=.78;
+ speechSynthesis.cancel();speechSynthesis.speak(u);
+ document.getElementById("status").textContent="ブラウザ音声です（実録音ではありません）";
+};
+document.getElementById("words").innerHTML=labels.map((x,i)=>`<button onclick="selected=${i};renderRegions();playRegion(${i})">${x} ▶</button>`).join("");
+renderRegions();
+window.addEventListener("resize",()=>{drawWave();drawSpec();});
+</script>
+</body>
+</html>
