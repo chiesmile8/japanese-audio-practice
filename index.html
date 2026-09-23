@@ -211,31 +211,21 @@ async function loadBlob(blob){
 document.getElementById("file").onchange=e=>{if(e.target.files[0])loadBlob(e.target.files[0])};
 
 function playRegion(i){
-  if(!audio.src)return;
-  audio.pause();
-
-  const start=regions[i][0];
-  const end=regions[i][1];
-
-  audio.currentTime=start;
-  audio.playbackRate=speed;
-
-  const watch=()=>{
-    if(audio.currentTime>=end || audio.paused){
-      audio.pause();
-      audio.currentTime=end;
-      return;
-    }
-    requestAnimationFrame(watch);
-  };
-
-  audio.play();
-  requestAnimationFrame(watch);
-}
  if(!audio.src)return;
- audio.pause();audio.currentTime=regions[i][0];audio.playbackRate=speed;audio.play();
+ audio.pause();
+ audio.currentTime=regions[i][0];
+ audio.playbackRate=speed;
  const end=regions[i][1];
- const stop=()=>{if(audio.currentTime>=end){audio.pause();audio.removeEventListener("timeupdate",stop)}};audio.addEventListener("timeupdate",stop);
+ const watch=()=>{
+  if(audio.currentTime>=end || audio.paused){
+   audio.pause();
+   audio.currentTime=end;
+   return;
+  }
+  requestAnimationFrame(watch);
+ };
+ audio.play();
+ requestAnimationFrame(watch);
 }
 document.getElementById("playAll").onclick=()=>{if(!audio.src)return;audio.currentTime=0;audio.playbackRate=speed;audio.play()};
 document.getElementById("slow").onclick=()=>{speed=speed===.5?1:.5;document.getElementById("slow").textContent="速度 "+speed+"x";audio.playbackRate=speed};
