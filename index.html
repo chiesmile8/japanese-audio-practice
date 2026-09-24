@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="ja">
 <head>
@@ -77,6 +78,8 @@ canvas{width:100%;height:150px;border:1px solid #ccc;border-radius:8px;backgroun
   <div class="controls" style="margin-top:12px">
     <input id="segmentText" type="text" placeholder="選択したセグメントの文字" style="flex:1;min-width:220px">
     <button id="setText">文字を確定</button>
+    <button id="deleteSegment">セグメント削除</button>
+    <button id="splitSegment">セグメント分割</button>
   </div>
   <p id="inputStatus" class="small"></p>
   <p id="hint" class="small"></p>
@@ -267,6 +270,45 @@ document.getElementById("setText").onclick=()=>{
  }
  enteredLabels[selected]=document.getElementById("segmentText").value.trim();
  document.getElementById("inputStatus").textContent=enteredLabels[selected] ? "文字を設定しました" : "文字を空にしました";
+ renderRegions();
+ renderWordButtons();
+};
+
+document.getElementById("deleteSegment").onclick=()=>{
+ if(selected<0){
+   document.getElementById("inputStatus").textContent="先に削除するセグメントを選択してください";
+   return;
+ }
+ if(regions.length<=1){
+   document.getElementById("inputStatus").textContent="最後の1つは削除できません";
+   return;
+ }
+ regions.splice(selected,1);
+ enteredLabels.splice(selected,1);
+ correct.splice(selected,1);
+ selected=Math.min(selected,regions.length-1);
+ document.getElementById("segmentText").value=enteredLabels[selected]||"";
+ document.getElementById("inputStatus").textContent="セグメントを削除しました";
+ renderRegions();
+ renderWordButtons();
+};
+
+document.getElementById("splitSegment").onclick=()=>{
+ if(selected<0){
+   document.getElementById("inputStatus").textContent="先に分割するセグメントを選択してください";
+   return;
+ }
+ const r=regions[selected];
+ const mid=(r[0]+r[1])/2;
+ const oldLabel=enteredLabels[selected]||"";
+ regions.splice(selected,1,[r[0],mid],[mid,r[1]]);
+ enteredLabels.splice(selected,1,oldLabel,"");
+ const cr=correct[selected] || [r[0],r[1]];
+ const cmid=(cr[0]+cr[1])/2;
+ correct.splice(selected,1,[cr[0],cmid],[cmid,cr[1]]);
+ selected=selected+1;
+ document.getElementById("segmentText").value="";
+ document.getElementById("inputStatus").textContent="セグメントを2つに分割しました";
  renderRegions();
  renderWordButtons();
 };
