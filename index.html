@@ -71,8 +71,14 @@ canvas{width:100%;height:150px;border:1px solid #ccc;border-radius:8px;backgroun
 </div>
 
 <div class="panel">
-  <b>単語をクリックして、その区間だけ再生</b>
+  <b>セグメントの文字入力</b>
+  <p class="small">セグメントをクリックして選択し、下の欄に文字を入力してください。</p>
   <div class="words" id="words"></div>
+  <div class="controls" style="margin-top:12px">
+    <input id="segmentText" type="text" placeholder="選択したセグメントの文字" style="flex:1;min-width:220px">
+    <button id="setText">文字を確定</button>
+  </div>
+  <p id="inputStatus" class="small"></p>
   <p id="hint" class="small"></p>
 </div>
 
@@ -84,6 +90,7 @@ canvas{width:100%;height:150px;border:1px solid #ccc;border-radius:8px;backgroun
 
 <script>
 const labels=["今日は","いい","天気","ですね"];
+let enteredLabels=["","","",""];
 const levels={
  beginner:"境界を大きくずらさず、まず「音が始まる／終わる」を探します。",
  intermediate:"子音の弱い立ち上がりや、語境界の無音の少ない部分まで意識します。",
@@ -161,7 +168,7 @@ function renderRegions(){
  regions.forEach((r,i)=>{
   const el=document.createElement("div");el.className="word"+(i===selected?" selected":"");
   el.style.left=(r[0]/duration*100)+"%";el.style.width=((r[1]-r[0])/duration*100)+"%";
-  el.textContent=labels[i];el.dataset.i=i;
+  el.textContent=enteredLabels[i] || "（文字を入力）";el.dataset.i=i;
   const l=document.createElement("div");l.className="handle l";const rr=document.createElement("div");rr.className="handle r";
   el.append(l,rr);timeline.appendChild(el);
   el.addEventListener("click",e=>{if(e.target.classList.contains("handle"))return;selected=i;renderRegions();playRegion(i)});
@@ -210,22 +217,11 @@ async function loadBlob(blob){
 }
 document.getElementById("file").onchange=e=>{if(e.target.files[0])loadBlob(e.target.files[0])};
 
-function playRegion(i){
+async function playRegion(i){
  if(!audio.src)return;
- audio.pause();
- audio.currentTime=regions[i][0];
- audio.playbackRate=speed;
+ audio.pause();audio.currentTime=regions[i][0];audio.playbackRate=speed;audio.play();
  const end=regions[i][1];
- const watch=()=>{
-  if(audio.currentTime>=end || audio.paused){
-   audio.pause();
-   audio.currentTime=end;
-   return;
-  }
-  requestAnimationFrame(watch);
- };
- audio.play();
- requestAnimationFrame(watch);
+ const stop=()=>{if(audio.currentTime>=end){audio.pause();audio.removeEventListener("timeupdate",stop)}};audio.addEventListener("timeupdate",stop);
 }
 document.getElementById("playAll").onclick=()=>{if(!audio.src)return;audio.currentTime=0;audio.playbackRate=speed;audio.play()};
 document.getElementById("slow").onclick=()=>{speed=speed===.5?1:.5;document.getElementById("slow").textContent="速度 "+speed+"x";audio.playbackRate=speed};
@@ -253,7 +249,31 @@ document.getElementById("fallback").onclick=()=>{
  speechSynthesis.cancel();speechSynthesis.speak(u);
  document.getElementById("status").textContent="ブラウザ音声です（実録音ではありません）";
 };
-document.getElementById("words").innerHTML=labels.map((x,i)=>`<button onclick="selected=${i};renderRegions();playRegion(${i})">${x} ▶</button>`).join("");
+function renderWordButtons(){
+ document.getElementById("words").innerHTML=regions.map((r,i)=>`<button data-i="${i}">${enteredLabels[i] || "セグメント"+(i+1)} ▶</button>`).join("");
+ document.querySelectorAll("#words button").forEach(btn=>btn.onclick=()=>{
+   const i=Number(btn.dataset.i);
+   selected=i;
+   document.getElementById("segmentText").value=enteredLabels[i];
+   document.getElementById("inputStatus").textContent="セグメント"+(i+1)+"を選択中";
+   renderRegions();
+   playRegion(i);
+ });
+}
+document.getElementById("setText").onclick=()=>{
+ if(selected<0){
+   document.getElementById("inputStatus").textContent="先にセグメントを選択してください";
+   return;
+ }
+ enteredLabels[selected]=document.getElementById("segmentText").value.trim();
+ document.getElementById("inputStatus").textContent=enteredLabels[selected] ? "文字を設定しました" : "文字を空にしました";
+ renderRegions();
+ renderWordButtons();
+};
+document.getElementById("segmentText").addEventListener("keydown",e=>{
+ if(e.key==="Enter"){e.preventDefault();document.getElementById("setText").click();}
+});
+renderWordButtons();
 renderRegions();
 window.addEventListener("resize",()=>{drawWave();drawSpec();});
 </script>
